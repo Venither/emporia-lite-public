@@ -63,8 +63,11 @@ Browser <──> web Lambda (Function URL) ──────────┘
 ```
 
 - **`poller`** — triggered hourly by an EventBridge scheduled rule. Logs
-  into Emporia (credentials from Secrets Manager, same as today), enumerates
-  devices/channels, and for each channel calls `get_chart_usage()` for the
+  into Emporia (credentials from a dedicated Secrets Manager secret — the
+  current family tracker actually reads a local `.env` file, not Secrets
+  Manager, so a new secret gets created for this deployment, seeded from
+  the same `.env` values), enumerates devices/channels, and for each channel
+  calls `get_chart_usage()` for the
   full previous hour at 1-second resolution. This is the same trick the
   current app already uses to get a *true* max instead of a max sampled at
   the polling interval: Emporia retains per-second history, so fetching the
@@ -119,9 +122,31 @@ model, not in the API responses, not in the UI.
 | `max_amps` | `9.4` | True max for that hour (hourly rows) or current reading (`LATEST`) |
 | `ttl` | epoch seconds, now + 30 days | DynamoDB TTL auto-deletes hourly rows after 30 days — no cleanup job |
 
-The whole-home total is not separately computed — Emporia already exposes
-it as its own channel (the `Main`/`Balance` circuit, same as the current
-app), so the 30-day graph is simply that circuit's hourly-row series.
+**Whole-home total, corrected during implementation verification:** Emporia's
+API explicitly rejects amp-hours for its own combined mains channel
+(`{"message":"AmpHours cannot be used with the combined mains channel"}`) —
+amps on separate phase legs aren't additive the way watts are, so Emporia
+won't compute a single whole-home amps value server-side. The two individual
+incoming service legs (`Mains_A`, `Mains_B` — a standard US split-phase
+120/240V panel) *do* return real historical amp data when queried directly
+by name (confirmed live: 3601 points/hour each, non-zero, plausible values).
+These aren't enumerable via `get_devices()` — they're addressed by
+constructing a channel object with `channel_num="Mains_A"` / `"Mains_B"`
+directly.
+
+Per explicit instruction, the app does not surface the two legs separately:
+the poller fetches both legs' true hourly max and stores their **sum** as a
+single synthetic `Main` circuit, alongside all the real individual circuits,
+through the same pipeline. This is plain addition of two real amp readings,
+not a derived/converted value — but it has one inherent quirk worth noting:
+any 240V load (dryer, oven, central AC) draws through both legs
+simultaneously, so summing the legs double-counts current from 240V
+appliances relative to what a single leg reports. This is a property of
+split-phase panels, not a modeling choice made here — flagged so it isn't a
+surprise later, not treated as a blocker.
+
+The 30-day graph is this single `Main` circuit's hourly-row series, same
+mechanism as every other circuit.
 
 ## Live/debug toggle
 
@@ -142,7 +167,8 @@ on the page:
 1. **Live table** — one row per circuit, current amps reading, refreshed
    from `LATEST` items every page load (and every few seconds if the
    live/debug toggle is on).
-2. **History graph** — one line, whole-home amps, 30 days, hourly
+2. **History graph** — one line, the combined `Main` circuit (both mains
+   legs summed — see whole-home total note above), 30 days, hourly
    resolution (720 points). Chart.js, same as today. Zoom/pan kept since
    it's functional (needed to read 720 points legibly), not decorative.
 
@@ -180,22 +206,29 @@ the account's shared free-tier-hours contention described in Background.
 
 ## Testing
 
-- Unit tests for `amphours_to_amps()` and the hourly-max reconstruction
-  logic — pure functions, testable without touching Emporia or AWS.
+- Unit tests for `amphours_to_amps()`, the hourly-max reconstruction logic,
+  the DynamoDB access helpers (via `moto`), and the web handler's payload
+  builders and routing — all pure or mockable, testable without touching
+  Emporia or real AWS.
 - Manual smoke test against the real Emporia account for `poller` and both
-  `web` routes before first deploy, since `AMPHOURS` as a live unit
-  parameter hasn't been exercised against Emporia's backend in this
-  codebase before (only inferred from the pyemvue enum and URL template —
-  worth confirming the values that come back look like real amps before
-  relying on them).
+  `web` routes before first deploy.
 
-## Open risks / things to confirm during implementation
+## Risks confirmed during design (resolved before implementation)
 
-- **`AMPHOURS` unit not yet verified against live Emporia data.** The
-  enum and endpoint parameter exist in pyemvue, but no request has
-  actually been made with `energyUnit=AmpHours` yet. First implementation
-  step should be a throwaway script confirming the returned values convert
-  to plausible amp readings (e.g., sanity-check against a known appliance
-  load) before building the rest of the pipeline on top of it.
+These were flagged as open risks during brainstorming and were resolved by
+live-testing against the real Emporia account before writing the
+implementation plan, rather than being left as first-implementation-step
+unknowns:
+
+- **`AMPHOURS` unit verified against live Emporia data.** Confirmed working
+  for individual circuits and for the two mains legs (3601 real per-second
+  points returned for a full hour, non-zero, plausible values). Confirmed
+  **not** supported for Emporia's own combined mains channel — see the
+  whole-home total note above for how that's handled instead.
+- **`get_devices()` returns `device.channels` as a list, not a dict** —
+  differs from the usage-response shape (`get_device_list_usage`'s
+  `VueUsageDevice.channels`, which *is* a dict). Verified against the
+  installed pyemvue 0.18.9 source directly; the channel-enumeration code in
+  this app iterates the list form correctly.
 - **`/api/live` is unauthenticated and publicly reachable** if the URL
-  leaks — accepted risk per above, not solved here.
+  leaks — accepted risk, not solved here, same reasoning as above.
