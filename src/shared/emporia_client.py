@@ -1,7 +1,3 @@
-import pyemvue
-from pyemvue.device import VueDeviceChannel
-from pyemvue.enums import Scale, Unit
-
 SCALE_SECONDS = 1  # matches Scale.SECOND
 MAINS_LEGS = ("Mains_A", "Mains_B")
 WHOLE_HOME_NAME = "Main"
