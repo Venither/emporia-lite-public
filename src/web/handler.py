@@ -123,8 +123,8 @@ def lambda_handler(event, context):
         return _json_response(handle_history_request(table))
 
     if method == "GET" and path == "/api/live":
-        email, password = secrets.get_emporia_credentials()
         try:
+            email, password = secrets.get_emporia_credentials()
             payload = handle_live_request(email, password)
         except Exception as exc:
             print(f"Live request failed: {exc}")

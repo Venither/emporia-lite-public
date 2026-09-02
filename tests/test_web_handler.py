@@ -81,6 +81,17 @@ def test_lambda_handler_returns_clean_error_when_live_request_fails():
     assert "emporia login failed" not in body["error"].lower()  # no raw exception text leaked
 
 
+def test_lambda_handler_returns_clean_error_when_credentials_fetch_fails():
+    event = {"requestContext": {"http": {"method": "GET"}}, "rawPath": "/api/live"}
+    with patch("web.handler.secrets.get_emporia_credentials", side_effect=RuntimeError("secret not found")):
+        response = handler.lambda_handler(event, None)
+
+    assert response["statusCode"] == 502
+    body = json.loads(response["body"])
+    assert "error" in body
+    assert "secret not found" not in body["error"].lower()  # no raw exception text leaked
+
+
 def test_lambda_handler_routes_history_and_returns_json():
     event = {"requestContext": {"http": {"method": "GET"}}, "rawPath": "/api/history"}
     with patch.dict(os.environ, {"TABLE_NAME": "EmporiaReadings"}), \
