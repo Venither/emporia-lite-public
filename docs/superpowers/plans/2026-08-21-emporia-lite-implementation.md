@@ -1137,8 +1137,8 @@ def lambda_handler(event, context):
         return _json_response(handle_history_request(table))
 
     if method == "GET" and path == "/api/live":
-        email, password = secrets.get_emporia_credentials()
         try:
+            email, password = secrets.get_emporia_credentials()
             payload = handle_live_request(email, password)
         except Exception as exc:
             print(f"Live request failed: {exc}")
@@ -1148,7 +1148,7 @@ def lambda_handler(event, context):
     return _not_found()
 ```
 
-Per the spec's Error Handling section: if Emporia login/fetch fails on `/api/live`, the route must return a clear error rather than a raw stack trace (a bare exception would otherwise propagate to Lambda's default 500 handler, which includes exception details in the body) — `_error_response` returns a fixed, non-leaking message instead.
+Per the spec's Error Handling section: if Emporia login/fetch fails on `/api/live`, the route must return a clear error rather than a raw stack trace (a bare exception would otherwise propagate to Lambda's default 500 handler, which includes exception details in the body) — `_error_response` returns a fixed, non-leaking message instead. The try block covers the credentials lookup too, not just the Emporia fetch — a Secrets Manager failure is exactly the same leak risk (caught during Task 6's review; the first draft only wrapped the Emporia fetch).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
