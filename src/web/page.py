@@ -81,6 +81,11 @@ PAGE_HTML = """<!doctype html>
         const res = await fetch("/api/live");
         if (!res.ok) throw new Error("live request failed");
         const data = await res.json();
+        // The toggle may have been switched off while this request was in
+        // flight (loadHistory() already repopulated `circuits` with the
+        // correct cached data in that case) -- discard a late response
+        // rather than clobbering it with a stale live reading.
+        if (!document.getElementById("liveToggle").checked) return;
         data.circuits.forEach(c => { circuits[c.circuit_id] = c; });
         renderTable();
         document.getElementById("status").textContent = "Live " + new Date().toLocaleTimeString();
