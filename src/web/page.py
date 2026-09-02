@@ -35,6 +35,13 @@ PAGE_HTML = """<!doctype html>
     let circuits = {}; // circuit_id -> {name, amps}
     let chart = null;
     let liveTimer = null;
+    // Bumped every time a new fetch is issued (from either loadHistory or
+    // pollLive). Each fetch captures its own generation before awaiting and
+    // only applies its result if still current -- this supersedes ANY
+    // earlier in-flight request regardless of which function issued it, so
+    // rapid toggling (off then back on before an old response lands) can't
+    // let a stale response overwrite a fresher one from either source.
+    let requestGeneration = 0;
 
     function renderTable() {
       const body = document.getElementById("circuitsBody");
@@ -67,8 +74,10 @@ PAGE_HTML = """<!doctype html>
     }
 
     async function loadHistory() {
+      const gen = ++requestGeneration;
       const res = await fetch("/api/history");
       const data = await res.json();
+      if (gen !== requestGeneration) return; // superseded by a newer request
       circuits = {};
       data.circuits.forEach(c => { circuits[c.circuit_id] = c; });
       renderTable();
@@ -77,19 +86,17 @@ PAGE_HTML = """<!doctype html>
     }
 
     async function pollLive() {
+      const gen = ++requestGeneration;
       try {
         const res = await fetch("/api/live");
         if (!res.ok) throw new Error("live request failed");
         const data = await res.json();
-        // The toggle may have been switched off while this request was in
-        // flight (loadHistory() already repopulated `circuits` with the
-        // correct cached data in that case) -- discard a late response
-        // rather than clobbering it with a stale live reading.
-        if (!document.getElementById("liveToggle").checked) return;
+        if (gen !== requestGeneration) return; // superseded by a newer request
         data.circuits.forEach(c => { circuits[c.circuit_id] = c; });
         renderTable();
         document.getElementById("status").textContent = "Live " + new Date().toLocaleTimeString();
       } catch (e) {
+        if (gen !== requestGeneration) return; // superseded by a newer request
         // Fall back to whatever's already rendered (last known LATEST reading)
         // instead of breaking the page on a transient Emporia/API failure.
         document.getElementById("status").textContent = "Live update failed, showing last known reading";
