@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Emporia Lite — serverless amps-only power dashboard
+
+Parameters:
+  EmporiaSecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret holding EMPORIA_EMAIL and EMPORIA_PASSWORD
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref ReadingsTable
+        EMPORIA_SECRET_ARN: !Ref EmporiaSecretArn
+
+Resources:
+  ReadingsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: EmporiaReadings
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  PollerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: poller.handler.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ReadingsTable
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref EmporiaSecretArn
+      Events:
+        HourlySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 hour)
+
+  WebFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: web.handler.lambda_handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref ReadingsTable
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref EmporiaSecretArn
+      FunctionUrlConfig:
+        AuthType: NONE
+
+Outputs:
+  WebFunctionUrl:
+    Description: Public URL for the dashboard
+    # SAM auto-creates an AWS::Lambda::Url resource for a function that sets
+    # FunctionUrlConfig, with logical ID "<FunctionLogicalId>Url" — for
+    # WebFunction that's WebFunctionUrl, and its ARN attribute is FunctionUrl.
+    Value: !GetAtt WebFunctionUrl.FunctionUrl
