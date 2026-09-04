@@ -20,7 +20,7 @@ PAGE_HTML = """<!doctype html>
 <body>
   <h1>Emporia Lite</h1>
   <table id="circuitsTable">
-    <thead><tr><th>Circuit</th><th class="amps" id="ampsHeader">Amps (last hour peak)</th></tr></thead>
+    <thead><tr><th>Circuit</th><th class="amps" id="ampsHeader">Amps (last hour peak)</th><th class="amps">All-Time Peak</th></tr></thead>
     <tbody id="circuitsBody"></tbody>
   </table>
   <div id="liveToggleRow">
@@ -69,8 +69,16 @@ PAGE_HTML = """<!doctype html>
         const ampsCell = document.createElement("td");
         ampsCell.className = "amps";
         ampsCell.textContent = c.amps.toFixed(1) + " A";
+        const peakCell = document.createElement("td");
+        peakCell.className = "amps";
+        // Live polls don't carry all_time_max (it's not written on that path
+        // -- see handle_live_request); the merge in pollLive() preserves
+        // whatever loadHistory() last populated here, so this can still be
+        // undefined only before the very first history load ever resolves.
+        peakCell.textContent = c.all_time_max != null ? c.all_time_max.toFixed(1) + " A" : "—";
         row.appendChild(nameCell);
         row.appendChild(ampsCell);
+        row.appendChild(peakCell);
         body.appendChild(row);
       });
     }
@@ -111,7 +119,13 @@ PAGE_HTML = """<!doctype html>
         if (!res.ok) throw new Error("live request failed");
         const data = await res.json();
         if (epoch !== liveEpoch) return; // toggle changed since this was issued; discard
-        data.circuits.forEach(c => { circuits[c.circuit_id] = c; });
+        // Merge, don't replace -- the live payload has no all_time_max (that
+        // field is only ever written by the poller, not the live pass-through
+        // path), so a wholesale replace here would blank out the column that
+        // loadHistory() already populated.
+        data.circuits.forEach(c => {
+          circuits[c.circuit_id] = { ...circuits[c.circuit_id], ...c };
+        });
         renderTable();
         document.getElementById("status").textContent = "Live " + new Date().toLocaleTimeString();
       } catch (e) {

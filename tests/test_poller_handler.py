@@ -28,7 +28,8 @@ def test_poll_and_store_writes_hourly_max_and_latest_for_each_channel_and_main()
     with patch("poller.handler.emporia_client.fetch_hour_max_amps", side_effect=[9.4, 3.1]), \
          patch("poller.handler.emporia_client.fetch_main_hour_max_amps", return_value=42.0), \
          patch("poller.handler.dynamo.put_hourly_max") as mock_put_hourly, \
-         patch("poller.handler.dynamo.put_latest_reading") as mock_put_latest:
+         patch("poller.handler.dynamo.put_latest_reading") as mock_put_latest, \
+         patch("poller.handler.dynamo.update_all_time_max") as mock_update_all_time:
         stored = handler.poll_and_store(fake_vue, fake_table, channels, 1, hour_start, hour_end)
 
     assert stored == 3
@@ -39,6 +40,10 @@ def test_poll_and_store_writes_hourly_max_and_latest_for_each_channel_and_main()
     mock_put_latest.assert_any_call(fake_table, "1:1", "Kitchen", 9.4)
     mock_put_latest.assert_any_call(fake_table, "1:2", "Garage", 3.1)
     mock_put_latest.assert_any_call(fake_table, "1:Main", "Main", 42.0)
+    assert mock_update_all_time.call_count == 3
+    mock_update_all_time.assert_any_call(fake_table, "1:1", "Kitchen", 9.4)
+    mock_update_all_time.assert_any_call(fake_table, "1:2", "Garage", 3.1)
+    mock_update_all_time.assert_any_call(fake_table, "1:Main", "Main", 42.0)
 
 
 def test_poll_and_store_skips_failing_channel_without_blocking_others():
@@ -61,12 +66,14 @@ def test_poll_and_store_skips_failing_channel_without_blocking_others():
     with patch("poller.handler.emporia_client.fetch_hour_max_amps", side_effect=fail_first), \
          patch("poller.handler.emporia_client.fetch_main_hour_max_amps", return_value=42.0), \
          patch("poller.handler.dynamo.put_hourly_max") as mock_put_hourly, \
-         patch("poller.handler.dynamo.put_latest_reading"):
+         patch("poller.handler.dynamo.put_latest_reading"), \
+         patch("poller.handler.dynamo.update_all_time_max") as mock_update_all_time:
         stored = handler.poll_and_store(fake_vue, fake_table, channels, 1, hour_start, hour_end)
 
     assert stored == 2  # one circuit failed, but Garage + Main still stored
     mock_put_hourly.assert_any_call(fake_table, "1:2", "2026-08-20T13:00:00Z", "Garage", 3.1)
     mock_put_hourly.assert_any_call(fake_table, "1:Main", "2026-08-20T13:00:00Z", "Main", 42.0)
+    assert mock_update_all_time.call_count == 2  # the failed channel never reaches update_all_time_max
 
 
 def test_poll_and_store_skips_main_when_device_gid_is_none():

@@ -12,19 +12,29 @@ def test_build_history_payload_shapes_circuits_and_history():
         {"SK": "2026-08-20T13:00:00Z", "max_amps": 40.0},
         {"SK": "2026-08-20T14:00:00Z", "max_amps": 45.5},
     ]
+    all_time_max_items = [
+        {"PK": "1:1", "max_amps": 15.0},
+        # no all-time-max row for 1:2 yet — must not crash, all_time_max is None
+    ]
 
-    payload = handler.build_history_payload(latest_items, whole_home_history)
+    payload = handler.build_history_payload(latest_items, whole_home_history, all_time_max_items)
 
     assert payload == {
         "circuits": [
-            {"circuit_id": "1:1", "name": "Kitchen", "amps": 9.4, "updated_at": 1000},
-            {"circuit_id": "1:2", "name": "Main", "amps": 42.0, "updated_at": 1000},
+            {"circuit_id": "1:1", "name": "Kitchen", "amps": 9.4, "updated_at": 1000, "all_time_max": 15.0},
+            {"circuit_id": "1:2", "name": "Main", "amps": 42.0, "updated_at": 1000, "all_time_max": None},
         ],
         "history": [
             {"hour": "2026-08-20T13:00:00Z", "amps": 40.0},
             {"hour": "2026-08-20T14:00:00Z", "amps": 45.5},
         ],
     }
+
+
+def test_build_history_payload_defaults_all_time_max_to_none_when_omitted():
+    latest_items = [{"PK": "1:1", "name": "Kitchen", "amps": 9.4, "updated_at": 1000}]
+    payload = handler.build_history_payload(latest_items, [])
+    assert payload["circuits"][0]["all_time_max"] is None
 
 
 def test_find_whole_home_circuit_id_matches_main():
@@ -49,11 +59,24 @@ def test_handle_history_request_skips_history_query_when_no_whole_home_circuit()
     fake_table = MagicMock()
     with patch("web.handler.dynamo.get_latest_readings", return_value=[
         {"PK": "1:1", "name": "Kitchen", "amps": 5.0, "updated_at": 1},
-    ]), patch("web.handler.dynamo.get_history") as mock_get_history:
+    ]), patch("web.handler.dynamo.get_all_time_maxes", return_value=[]), \
+         patch("web.handler.dynamo.get_history") as mock_get_history:
         result = handler.handle_history_request(fake_table)
 
     mock_get_history.assert_not_called()
     assert result["history"] == []
+
+
+def test_handle_history_request_includes_all_time_max_per_circuit():
+    fake_table = MagicMock()
+    with patch("web.handler.dynamo.get_latest_readings", return_value=[
+        {"PK": "1:1", "name": "Kitchen", "amps": 5.0, "updated_at": 1},
+    ]), patch("web.handler.dynamo.get_all_time_maxes", return_value=[
+        {"PK": "1:1", "max_amps": 30.0},
+    ]), patch("web.handler.dynamo.get_history", return_value=[]):
+        result = handler.handle_history_request(fake_table)
+
+    assert result["circuits"][0]["all_time_max"] == 30.0
 
 
 def _live_channels():

@@ -32,6 +32,7 @@ def poll_and_store(vue, table, channels, device_gid, hour_start, hour_end):
             continue
         dynamo.put_hourly_max(table, ch["circuit_id"], hstr, ch["name"], max_amps)
         dynamo.put_latest_reading(table, ch["circuit_id"], ch["name"], max_amps)
+        dynamo.update_all_time_max(table, ch["circuit_id"], ch["name"], max_amps)
         stored += 1
 
     if device_gid is not None:
@@ -45,6 +46,7 @@ def poll_and_store(vue, table, channels, device_gid, hour_start, hour_end):
             main_circuit_id = f"{device_gid}:{emporia_client.WHOLE_HOME_NAME}"
             dynamo.put_hourly_max(table, main_circuit_id, hstr, emporia_client.WHOLE_HOME_NAME, main_amps)
             dynamo.put_latest_reading(table, main_circuit_id, emporia_client.WHOLE_HOME_NAME, main_amps)
+            dynamo.update_all_time_max(table, main_circuit_id, emporia_client.WHOLE_HOME_NAME, main_amps)
             stored += 1
 
     return stored

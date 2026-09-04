@@ -28,7 +28,10 @@ def reset_client_cache():
     _client_cache.clear()
 
 
-def build_history_payload(latest_items, whole_home_history):
+def build_history_payload(latest_items, whole_home_history, all_time_max_items=None):
+    all_time_by_id = {
+        item["PK"]: float(item["max_amps"]) for item in (all_time_max_items or [])
+    }
     return {
         "circuits": [
             {
@@ -36,6 +39,7 @@ def build_history_payload(latest_items, whole_home_history):
                 "name": item["name"],
                 "amps": float(item["amps"]),
                 "updated_at": int(item["updated_at"]),
+                "all_time_max": all_time_by_id.get(item["PK"]),
             }
             for item in latest_items
         ],
@@ -73,9 +77,10 @@ def since_iso(now=None):
 
 def handle_history_request(table):
     latest_items = dynamo.get_latest_readings(table)
+    all_time_items = dynamo.get_all_time_maxes(table)
     whole_home_id = find_whole_home_circuit_id(latest_items)
     history = dynamo.get_history(table, whole_home_id, since_iso()) if whole_home_id else []
-    return build_history_payload(latest_items, history)
+    return build_history_payload(latest_items, history, all_time_items)
 
 
 def handle_live_request(email, password):

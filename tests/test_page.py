@@ -43,3 +43,19 @@ def test_amps_column_is_labelled_per_mode():
 def test_circuit_names_are_not_interpolated_into_innerhtml():
     assert "nameCell.textContent = c.name" in PAGE_HTML
     assert "${c.name}" not in PAGE_HTML
+
+
+def test_all_time_peak_column_present():
+    assert "All-Time Peak" in PAGE_HTML
+    assert "c.all_time_max" in PAGE_HTML
+
+
+def test_live_poll_merges_rather_than_replaces_circuit_data():
+    # The live payload never carries all_time_max (only the poller writes
+    # it). A wholesale replace in pollLive() would blank that column out
+    # the moment the toggle is switched on.
+    start = PAGE_HTML.index("async function pollLive()")
+    end = PAGE_HTML.index('document.getElementById("liveToggle").addEventListener')
+    body = PAGE_HTML[start:end]
+    assert "circuits[c.circuit_id] = { ...circuits[c.circuit_id], ...c }" in body
+    assert "circuits[c.circuit_id] = c;" not in body

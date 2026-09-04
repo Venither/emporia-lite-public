@@ -104,3 +104,48 @@ def test_get_latest_readings_single_page_does_not_rescan():
 
     assert [item["PK"] for item in items] == ["1:1"]
     assert fake_table.scan.call_count == 1
+
+
+@mock_aws
+def test_update_all_time_max_creates_row_when_none_exists():
+    table = _make_table()
+    dynamo.update_all_time_max(table, "1:1", "Main", 12.5)
+
+    item = table.get_item(Key={"PK": "1:1", "SK": "ALL_TIME_MAX"})["Item"]
+    assert float(item["max_amps"]) == 12.5
+    assert item["name"] == "Main"
+    assert "ttl" not in item  # never expires, unlike hourly rows
+
+
+@mock_aws
+def test_update_all_time_max_updates_when_new_reading_is_higher():
+    table = _make_table()
+    dynamo.update_all_time_max(table, "1:1", "Main", 12.5)
+    dynamo.update_all_time_max(table, "1:1", "Main", 20.0)
+
+    item = table.get_item(Key={"PK": "1:1", "SK": "ALL_TIME_MAX"})["Item"]
+    assert float(item["max_amps"]) == 20.0
+
+
+@mock_aws
+def test_update_all_time_max_leaves_existing_value_when_new_reading_is_lower():
+    table = _make_table()
+    dynamo.update_all_time_max(table, "1:1", "Main", 20.0)
+    dynamo.update_all_time_max(table, "1:1", "Main", 5.0)  # must not overwrite the real peak
+
+    item = table.get_item(Key={"PK": "1:1", "SK": "ALL_TIME_MAX"})["Item"]
+    assert float(item["max_amps"]) == 20.0
+
+
+@mock_aws
+def test_get_all_time_maxes_excludes_other_row_types():
+    table = _make_table()
+    dynamo.update_all_time_max(table, "1:1", "Main", 20.0)
+    dynamo.put_latest_reading(table, "1:1", "Main", 5.0)
+    dynamo.put_hourly_max(table, "1:1", "2026-08-20T14:00:00Z", "Main", 5.0)
+    dynamo.update_all_time_max(table, "1:2", "Garage", 3.1)
+
+    all_time = dynamo.get_all_time_maxes(table)
+    by_circuit = {item["PK"]: float(item["max_amps"]) for item in all_time}
+
+    assert by_circuit == {"1:1": 20.0, "1:2": 3.1}
