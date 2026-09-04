@@ -67,6 +67,10 @@ Resources:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
               Resource: !Ref EmporiaSecretArn
+      # The Function URL is unauthenticated by design, so cap the blast
+      # radius if it ever leaks or gets scraped. Far above what a single
+      # household's page views (and their 5s live polls) need.
+      ReservedConcurrentExecutions: 5
       FunctionUrlConfig:
         AuthType: NONE
 
