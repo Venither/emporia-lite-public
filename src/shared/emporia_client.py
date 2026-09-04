@@ -113,8 +113,19 @@ def fetch_main_hour_max_amps(vue, device_gid, hour_start, hour_end):
 
 
 def fetch_live_amps(vue, device_gids):
+    """max_retry_attempts=1 disables pyemvue's internal retry loop. pyemvue
+    retries whenever ANY channel in the response has usage=None — which is
+    routine for the synthetic Mains_*/combined channels this app doesn't use —
+    and its default backoff (5 attempts, 2s initial, 30s cap) can sleep ~30s
+    on its own, meeting or exceeding the Lambda's 30s timeout and producing a
+    raw timeout instead of this app's clean 502 error path. The loop below
+    already skips null-usage channels, so the retry bought nothing here."""
     usage_dict = vue.get_device_list_usage(
-        device_gids, None, Scale.SECOND.value, Unit.AMPHOURS.value
+        device_gids,
+        None,
+        Scale.SECOND.value,
+        Unit.AMPHOURS.value,
+        max_retry_attempts=1,
     )
     readings = {}
     for gid, device in usage_dict.items():

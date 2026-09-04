@@ -151,3 +151,28 @@ def test_fetch_live_amps_uses_amphours_unit():
     assert result == {"42:1": 2.0}
     args, kwargs = fake_vue.get_device_list_usage.call_args
     assert args[2] == "AmpHours" or kwargs.get("unit") == "AmpHours" or args[-1] == "AmpHours"
+
+
+def test_fetch_live_amps_disables_pyemvue_internal_retry_loop():
+    # pyemvue retries whenever ANY channel comes back with usage=None, with a
+    # default backoff that can sleep ~30s -- past the Lambda's 30s timeout.
+    # fetch_live_amps skips null-usage channels itself, so retries buy nothing.
+    with_usage = MagicMock()
+    with_usage.usage = 2 / 3600
+    with_usage.channel_num = "1"
+
+    without_usage = MagicMock()
+    without_usage.usage = None
+    without_usage.channel_num = "Mains_A"
+
+    fake_device = MagicMock()
+    fake_device.channels = {"1": with_usage, "Mains_A": without_usage}
+
+    fake_vue = MagicMock()
+    fake_vue.get_device_list_usage.return_value = {42: fake_device}
+
+    result = emporia_client.fetch_live_amps(fake_vue, [42])
+
+    assert result == {"42:1": 2.0}  # null-usage channel skipped, not retried
+    _, kwargs = fake_vue.get_device_list_usage.call_args
+    assert kwargs["max_retry_attempts"] == 1
