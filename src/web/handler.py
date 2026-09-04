@@ -6,6 +6,27 @@ from shared import dynamo, emporia_client, secrets
 
 HISTORY_DAYS = 30
 
+# Module-scope cache for the logged-in Emporia client, same warm-container
+# pattern shared.secrets uses. This Lambda only ever talks to one Emporia
+# account, so a single global slot is enough — no keying needed. With the
+# live toggle on the browser polls every 5s; without this, that's a full
+# Cognito SRP login per poll per viewer.
+_client_cache = {}
+
+
+def get_cached_client(email, password):
+    if "vue" not in _client_cache:
+        _client_cache["vue"] = emporia_client.login(email, password)
+    return _client_cache["vue"]
+
+
+def reset_client_cache():
+    """Drop the cached client so the next /api/live does a fresh login.
+    Called after a failed live request — pyemvue's Auth already refreshes
+    expired tokens on its own, so this is only a backstop for a session that
+    has gone unrecoverably stale inside a long-lived warm container."""
+    _client_cache.clear()
+
 
 def build_history_payload(latest_items, whole_home_history):
     return {
@@ -58,7 +79,7 @@ def handle_history_request(table):
 
 
 def handle_live_request(email, password):
-    vue = emporia_client.login(email, password)
+    vue = get_cached_client(email, password)
     channels = emporia_client.fetch_channels(vue)  # already excludes the combined multi-leg channel
     device_gids = list({ch["device_gid"] for ch in channels})
     readings = emporia_client.fetch_live_amps(vue, device_gids)
@@ -128,6 +149,7 @@ def lambda_handler(event, context):
             payload = handle_live_request(email, password)
         except Exception as exc:
             print(f"Live request failed: {exc}")
+            reset_client_cache()  # next request re-logs in rather than reusing a possibly-dead session
             return _error_response("Live reading unavailable — Emporia request failed")
         return _json_response(payload)
 

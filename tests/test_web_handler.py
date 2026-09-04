@@ -56,6 +56,123 @@ def test_handle_history_request_skips_history_query_when_no_whole_home_circuit()
     assert result["history"] == []
 
 
+def _live_channels():
+    """What emporia_client.fetch_channels really returns: the enumerable
+    named circuits only — it already drops the combined '1,2,3' channel, and
+    the Mains_* legs are never enumerated by get_devices() at all."""
+    return [
+        {"circuit_id": "42:1", "name": "Kitchen", "device_gid": 42, "channel_num": "1"},
+        {"circuit_id": "42:2", "name": "Garage", "device_gid": 42, "channel_num": "2"},
+    ]
+
+
+def _live_readings():
+    """What emporia_client.fetch_live_amps really returns: get_device_list_usage
+    hands back the Mains_* legs and the combined channel too, none of which
+    should reach the UI as circuits of their own."""
+    return {
+        "42:Mains_A": 10.0,
+        "42:Mains_B": 12.0,
+        "42:1,2,3": 22.0,
+        "42:1": 5.0,
+        "42:2": 3.0,
+    }
+
+
+def test_handle_live_request_returns_real_circuits_plus_synthesized_main():
+    handler.reset_client_cache()
+    with patch("web.handler.emporia_client.login", return_value=MagicMock()), \
+         patch("web.handler.emporia_client.fetch_channels", return_value=_live_channels()), \
+         patch("web.handler.emporia_client.fetch_live_amps", return_value=_live_readings()):
+        payload = handler.handle_live_request("a@b.com", "x")
+
+    by_id = {c["circuit_id"]: c for c in payload["circuits"]}
+
+    assert set(by_id) == {"42:1", "42:2", "42:Main"}
+    assert by_id["42:1"] == {"circuit_id": "42:1", "name": "Kitchen", "amps": 5.0}
+    assert by_id["42:2"] == {"circuit_id": "42:2", "name": "Garage", "amps": 3.0}
+    assert by_id["42:Main"] == {"circuit_id": "42:Main", "name": "Main", "amps": 22.0}
+
+    # Nothing synthetic leaks through as a circuit of its own.
+    names = {c["name"] for c in payload["circuits"]}
+    assert "Mains_A" not in names and "Mains_B" not in names
+    assert not any("," in cid for cid in by_id)
+
+
+def test_handle_live_request_dedups_device_gids():
+    handler.reset_client_cache()
+    channels = _live_channels() + [
+        {"circuit_id": "42:3", "name": "Office", "device_gid": 42, "channel_num": "3"},
+    ]
+    with patch("web.handler.emporia_client.login", return_value=MagicMock()), \
+         patch("web.handler.emporia_client.fetch_channels", return_value=channels), \
+         patch("web.handler.emporia_client.fetch_live_amps", return_value=_live_readings()) as mock_live:
+        payload = handler.handle_live_request("a@b.com", "x")
+
+    gids = mock_live.call_args[0][1]
+    assert gids == [42]  # one call for the shared device, not one per channel
+
+    # Only one synthesized Main, even though three channels share the gid.
+    assert [c["name"] for c in payload["circuits"]].count("Main") == 1
+
+
+def test_handle_live_request_skips_channels_with_no_live_reading():
+    handler.reset_client_cache()
+    readings = dict(_live_readings())
+    del readings["42:2"]  # Garage reported no usage this instant
+    with patch("web.handler.emporia_client.login", return_value=MagicMock()), \
+         patch("web.handler.emporia_client.fetch_channels", return_value=_live_channels()), \
+         patch("web.handler.emporia_client.fetch_live_amps", return_value=readings):
+        payload = handler.handle_live_request("a@b.com", "x")
+
+    assert {c["circuit_id"] for c in payload["circuits"]} == {"42:1", "42:Main"}
+
+
+def test_handle_live_request_omits_main_when_a_mains_leg_is_missing():
+    handler.reset_client_cache()
+    readings = dict(_live_readings())
+    del readings["42:Mains_B"]
+    with patch("web.handler.emporia_client.login", return_value=MagicMock()), \
+         patch("web.handler.emporia_client.fetch_channels", return_value=_live_channels()), \
+         patch("web.handler.emporia_client.fetch_live_amps", return_value=readings):
+        payload = handler.handle_live_request("a@b.com", "x")
+
+    assert {c["circuit_id"] for c in payload["circuits"]} == {"42:1", "42:2"}
+
+
+def test_get_cached_client_logs_in_only_once():
+    handler.reset_client_cache()
+    fake_vue = MagicMock()
+    with patch("web.handler.emporia_client.login", return_value=fake_vue) as mock_login:
+        first = handler.get_cached_client("a@b.com", "x")
+        second = handler.get_cached_client("a@b.com", "x")
+
+    assert first is second is fake_vue
+    assert mock_login.call_count == 1
+
+
+def test_reset_client_cache_forces_a_fresh_login():
+    handler.reset_client_cache()
+    with patch("web.handler.emporia_client.login", return_value=MagicMock()) as mock_login:
+        handler.get_cached_client("a@b.com", "x")
+        handler.reset_client_cache()
+        handler.get_cached_client("a@b.com", "x")
+
+    assert mock_login.call_count == 2
+
+
+def test_failed_live_request_invalidates_the_cached_client():
+    handler.reset_client_cache()
+    event = {"requestContext": {"http": {"method": "GET"}}, "rawPath": "/api/live"}
+    with patch("web.handler.secrets.get_emporia_credentials", return_value=("a@b.com", "x")), \
+         patch("web.handler.emporia_client.login", return_value=MagicMock()), \
+         patch("web.handler.emporia_client.fetch_channels", side_effect=RuntimeError("session expired")):
+        response = handler.lambda_handler(event, None)
+
+    assert response["statusCode"] == 502
+    assert handler._client_cache == {}
+
+
 def test_lambda_handler_routes_root_to_html():
     event = {"requestContext": {"http": {"method": "GET"}}, "rawPath": "/"}
     response = handler.lambda_handler(event, None)
