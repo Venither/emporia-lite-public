@@ -33,10 +33,21 @@ def put_latest_reading(table, circuit_id, name, amps):
 
 
 def get_latest_readings(table):
-    """Full-table scan filtered to SK == 'LATEST'. Fine at this scale — a
-    handful of circuits, never more than a few dozen items match."""
-    response = table.scan(FilterExpression=Attr("SK").eq("LATEST"))
-    return response.get("Items", [])
+    """Full-table scan filtered to SK == 'LATEST'.
+
+    Paginated: DynamoDB applies its 1MB page limit BEFORE the filter
+    expression, so this scan walks every hourly row in the table (~17
+    circuits x 720 hourly rows over the 30-day TTL window). Once that
+    crosses 1MB, a single un-paginated scan silently drops LATEST items —
+    including possibly 'Main', which would empty the whole 30-day graph."""
+    items = []
+    kwargs = {"FilterExpression": Attr("SK").eq("LATEST")}
+    while True:
+        response = table.scan(**kwargs)
+        items.extend(response.get("Items", []))
+        if "LastEvaluatedKey" not in response:
+            return items
+        kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
 
 
 def get_history(table, circuit_id, since_iso):

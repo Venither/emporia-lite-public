@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import boto3
 from moto import mock_aws
 from shared import dynamo
@@ -63,3 +65,42 @@ def test_ttl_attribute_set_on_hourly_rows():
     item = table.get_item(Key={"PK": "1:1", "SK": "2026-08-20T14:00:00Z"})["Item"]
     assert "ttl" in item
     assert item["ttl"] > 0
+
+
+@mock_aws
+def test_ttl_attribute_not_set_on_latest_rows():
+    # LATEST rows must never expire — they're the live table's only data
+    # source on page load, and they're overwritten in place every hour.
+    table = _make_table()
+    dynamo.put_latest_reading(table, "1:1", "Main", 5.0)
+    item = table.get_item(Key={"PK": "1:1", "SK": "LATEST"})["Item"]
+    assert "ttl" not in item
+
+
+def test_get_latest_readings_follows_pagination():
+    # DynamoDB applies its 1MB page cap BEFORE the filter expression, so this
+    # scan pages even though only a handful of items match. Dropping page 2
+    # would silently lose circuits (possibly 'Main').
+    fake_table = MagicMock()
+    fake_table.scan.side_effect = [
+        {"Items": [{"PK": "1:1", "SK": "LATEST"}], "LastEvaluatedKey": {"PK": "1:1", "SK": "LATEST"}},
+        {"Items": [{"PK": "1:2", "SK": "LATEST"}]},
+    ]
+
+    items = dynamo.get_latest_readings(fake_table)
+
+    assert [item["PK"] for item in items] == ["1:1", "1:2"]
+    assert fake_table.scan.call_count == 2
+    second_call_kwargs = fake_table.scan.call_args_list[1].kwargs
+    assert second_call_kwargs["ExclusiveStartKey"] == {"PK": "1:1", "SK": "LATEST"}
+    assert "FilterExpression" in second_call_kwargs  # filter carried across pages
+
+
+def test_get_latest_readings_single_page_does_not_rescan():
+    fake_table = MagicMock()
+    fake_table.scan.return_value = {"Items": [{"PK": "1:1", "SK": "LATEST"}]}
+
+    items = dynamo.get_latest_readings(fake_table)
+
+    assert [item["PK"] for item in items] == ["1:1"]
+    assert fake_table.scan.call_count == 1
