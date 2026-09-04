@@ -13,3 +13,33 @@ def test_page_has_expected_elements():
 def test_page_fetches_the_real_api_routes():
     assert '"/api/history"' in PAGE_HTML
     assert '"/api/live"' in PAGE_HTML
+
+
+def test_live_epoch_changes_only_on_toggle_not_per_request():
+    # A per-request generation counter made every poll supersede the one
+    # before it whenever /api/live was slower than the 5s interval, freezing
+    # the table silently. The epoch must move only on a toggle state change.
+    assert "liveEpoch++" in PAGE_HTML
+    assert PAGE_HTML.count("liveEpoch++") == 1
+    assert "++requestGeneration" not in PAGE_HTML
+    assert "const epoch = liveEpoch;" in PAGE_HTML
+
+
+def test_chart_is_rendered_before_the_live_ownership_check():
+    # renderChart must not sit behind the early return, or toggling live on
+    # during the initial load leaves the chart permanently blank.
+    body = PAGE_HTML[PAGE_HTML.index("async function loadHistory()"):]
+    body = body[: body.index("async function pollLive()")]
+    assert body.index("renderChart(data.history)") < body.index("if (isLive()) return")
+    assert "renderChart" not in PAGE_HTML[PAGE_HTML.index("async function pollLive()"):]
+
+
+def test_amps_column_is_labelled_per_mode():
+    assert "Amps (last hour peak)" in PAGE_HTML
+    assert "Amps (live)" in PAGE_HTML
+    assert 'id="ampsHeader"' in PAGE_HTML
+
+
+def test_circuit_names_are_not_interpolated_into_innerhtml():
+    assert "nameCell.textContent = c.name" in PAGE_HTML
+    assert "${c.name}" not in PAGE_HTML

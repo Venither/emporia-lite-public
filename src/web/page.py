@@ -20,7 +20,7 @@ PAGE_HTML = """<!doctype html>
 <body>
   <h1>Emporia Lite</h1>
   <table id="circuitsTable">
-    <thead><tr><th>Circuit</th><th class="amps">Amps</th></tr></thead>
+    <thead><tr><th>Circuit</th><th class="amps" id="ampsHeader">Amps (last hour peak)</th></tr></thead>
     <tbody id="circuitsBody"></tbody>
   </table>
   <div id="liveToggleRow">
@@ -35,24 +35,42 @@ PAGE_HTML = """<!doctype html>
     let circuits = {}; // circuit_id -> {name, amps}
     let chart = null;
     let liveTimer = null;
-    // Bumped every time a new fetch is issued (from either loadHistory or
-    // pollLive). Each fetch captures its own generation before awaiting and
-    // only applies its result if still current -- this supersedes ANY
-    // earlier in-flight request regardless of which function issued it, so
-    // rapid toggling (off then back on before an old response lands) can't
-    // let a stale response overwrite a fresher one from either source.
-    let requestGeneration = 0;
+    // Bumped ONLY when the live toggle's checked state changes -- never per
+    // fetch. A pollLive() captures the epoch before awaiting and discards its
+    // result if the toggle flipped in the meantime, so a reading issued
+    // before a toggle-off can't overwrite the historical table afterwards.
+    // Deliberately NOT bumped per request: doing that made every poll
+    // supersede the previous one whenever /api/live took longer than the 5s
+    // interval, which froze the table with no error shown.
+    let liveEpoch = 0;
+
+    function isLive() {
+      return document.getElementById("liveToggle").checked;
+    }
 
     function renderTable() {
       const body = document.getElementById("circuitsBody");
       body.innerHTML = "";
+      // The LATEST rows the poller writes hold last hour's PEAK draw, while
+      // /api/live is an instantaneous reading -- same column, two different
+      // meanings, so label which one is on screen.
+      document.getElementById("ampsHeader").textContent =
+        isLive() ? "Amps (live)" : "Amps (last hour peak)";
       const all = Object.values(circuits);
       const main = all.filter(c => c.name === "Main");
       const rest = all.filter(c => c.name !== "Main").sort((a, b) => a.name.localeCompare(b.name));
       [...main, ...rest].forEach(c => {
         const row = document.createElement("tr");
         if (c.name === "Main") row.className = "main-row";
-        row.innerHTML = `<td>${c.name}</td><td class="amps">${c.amps.toFixed(1)} A</td>`;
+        // textContent, not innerHTML -- circuit names come from Emporia and
+        // are never treated as markup.
+        const nameCell = document.createElement("td");
+        nameCell.textContent = c.name;
+        const ampsCell = document.createElement("td");
+        ampsCell.className = "amps";
+        ampsCell.textContent = c.amps.toFixed(1) + " A";
+        row.appendChild(nameCell);
+        row.appendChild(ampsCell);
         body.appendChild(row);
       });
     }
@@ -74,36 +92,38 @@ PAGE_HTML = """<!doctype html>
     }
 
     async function loadHistory() {
-      const gen = ++requestGeneration;
       const res = await fetch("/api/history");
       const data = await res.json();
-      if (gen !== requestGeneration) return; // superseded by a newer request
+      // The chart is written here and nowhere else, so it always renders --
+      // even if the toggle was flipped on while this request was in flight.
+      renderChart(data.history);
+      if (isLive()) return; // live mode owns the table; don't overwrite it
       circuits = {};
       data.circuits.forEach(c => { circuits[c.circuit_id] = c; });
       renderTable();
-      renderChart(data.history);
       document.getElementById("status").textContent = "Loaded " + new Date().toLocaleTimeString();
     }
 
     async function pollLive() {
-      const gen = ++requestGeneration;
+      const epoch = liveEpoch;
       try {
         const res = await fetch("/api/live");
         if (!res.ok) throw new Error("live request failed");
         const data = await res.json();
-        if (gen !== requestGeneration) return; // superseded by a newer request
+        if (epoch !== liveEpoch) return; // toggle changed since this was issued; discard
         data.circuits.forEach(c => { circuits[c.circuit_id] = c; });
         renderTable();
         document.getElementById("status").textContent = "Live " + new Date().toLocaleTimeString();
       } catch (e) {
-        if (gen !== requestGeneration) return; // superseded by a newer request
-        // Fall back to whatever's already rendered (last known LATEST reading)
+        if (epoch !== liveEpoch) return; // toggle changed since this was issued; discard
+        // Fall back to whatever's already rendered (last known reading)
         // instead of breaking the page on a transient Emporia/API failure.
         document.getElementById("status").textContent = "Live update failed, showing last known reading";
       }
     }
 
     document.getElementById("liveToggle").addEventListener("change", (e) => {
+      liveEpoch++; // invalidate any pollLive issued under the previous state
       if (e.target.checked) {
         pollLive();
         liveTimer = setInterval(pollLive, 5000);
