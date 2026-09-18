@@ -1,3 +1,8 @@
+"""The hourly cron Lambda. AWS EventBridge triggers lambda_handler() once
+an hour; it logs into Emporia, pulls the last hour's true peak per
+circuit, and writes it to DynamoDB. Deployed as `PollerFunction` in
+template.yaml."""
+
 import datetime
 import os
 
@@ -5,6 +10,8 @@ from shared import dynamo, emporia_client, secrets
 
 
 def previous_hour_bounds(now=None):
+    """Returns the (start, end) of the hour that just finished — e.g. if
+    it's 14:07, returns (13:00, 14:00). `now` is only overridden by tests."""
     now = now or datetime.datetime.utcnow()
     hour_end = now.replace(minute=0, second=0, microsecond=0)
     hour_start = hour_end - datetime.timedelta(hours=1)
@@ -12,6 +19,8 @@ def previous_hour_bounds(now=None):
 
 
 def hour_str(hour_start):
+    """Formats an hour boundary as the ISO string used for DynamoDB sort
+    keys, e.g. "2026-08-20T13:00:00Z"."""
     return hour_start.strftime("%Y-%m-%dT%H:00:00Z")
 
 
@@ -53,6 +62,8 @@ def poll_and_store(vue, table, channels, device_gid, hour_start, hour_end):
 
 
 def lambda_handler(event, context):
+    """Entry point AWS invokes on the hourly schedule. `event`/`context`
+    are unused — this Lambda doesn't care what triggered it, only when."""
     email, password = secrets.get_emporia_credentials()
     table = dynamo.get_table(os.environ["TABLE_NAME"])
 

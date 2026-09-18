@@ -1,3 +1,11 @@
+# AWS SAM (Serverless Application Model) template — the single source of
+# truth for every AWS resource this app uses: 2 Lambda functions
+# (PollerFunction, WebFunction — see src/poller/handler.py and
+# src/web/handler.py), 1 DynamoDB table, and the hourly schedule that
+# triggers the poller. No EC2, load balancer, or API Gateway — the web
+# Lambda is reachable directly via its own HTTPS "Function URL".
+#
+# Deploy changes to this file with `sam build && sam deploy` (see README).
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Emporia Lite — serverless amps-only power dashboard

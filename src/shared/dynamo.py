@@ -1,3 +1,10 @@
+"""All reads and writes to the EmporiaReadings DynamoDB table go through
+this file. One table holds three kinds of row per circuit, distinguished
+by the sort key (SK): a dated hourly row (e.g. "2026-08-20T14:00:00Z"),
+one "LATEST" row (the most recent reading), and one "ALL_TIME_MAX" row
+(the highest reading ever seen). Every function here takes the table
+object as its first argument, obtained by calling get_table()."""
+
 import time
 from decimal import Decimal
 
@@ -11,10 +18,15 @@ ALL_TIME_MAX_SK = "ALL_TIME_MAX"
 
 
 def get_table(table_name):
+    """Returns a boto3 Table resource — pass this into every other
+    function in this file."""
     return boto3.resource("dynamodb").Table(table_name)
 
 
 def put_hourly_max(table, circuit_id, hour, name, max_amps):
+    """Writes one hour's true peak reading for a circuit. Auto-deleted
+    after 30 days via the `ttl` attribute (DynamoDB's built-in expiry) —
+    this is what feeds the 30-day history graph."""
     table.put_item(Item={
         "PK": circuit_id,
         "SK": hour,
@@ -25,6 +37,9 @@ def put_hourly_max(table, circuit_id, hour, name, max_amps):
 
 
 def put_latest_reading(table, circuit_id, name, amps):
+    """Overwrites the single "current reading" row for a circuit — this is
+    what the dashboard table shows on page load. No TTL: it's always
+    overwritten by the next poll, never left to expire."""
     table.put_item(Item={
         "PK": circuit_id,
         "SK": "LATEST",
@@ -78,10 +93,13 @@ def _scan_by_sk(table, sk_value):
 
 
 def get_latest_readings(table):
+    """One row per circuit: its most recent reading. Feeds the dashboard's
+    live table on page load."""
     return _scan_by_sk(table, "LATEST")
 
 
 def get_all_time_maxes(table):
+    """One row per circuit: the highest reading ever recorded for it."""
     return _scan_by_sk(table, ALL_TIME_MAX_SK)
 
 

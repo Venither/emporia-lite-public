@@ -1,3 +1,6 @@
+"""Fetches the Emporia login (email + password) from AWS Secrets Manager
+at runtime — credentials are never hardcoded or stored in this repo."""
+
 import json
 import os
 

@@ -1,3 +1,10 @@
+"""The HTTP-facing Lambda, reachable directly over HTTPS via a Lambda
+Function URL (see template.yaml). lambda_handler() is the entry point AWS
+invokes for every request; it routes to one of three things: the
+dashboard page (page.py), a JSON snapshot of stored readings
+(/api/history), or a live on-demand reading (/api/live). Deployed as
+`WebFunction` in template.yaml."""
+
 import datetime
 import json
 import os
@@ -29,6 +36,8 @@ def reset_client_cache():
 
 
 def build_history_payload(latest_items, whole_home_history, all_time_max_items=None):
+    """Shapes the raw DynamoDB rows from handle_history_request() into the
+    JSON structure /api/history actually returns to the browser."""
     all_time_by_id = {
         item["PK"]: float(item["max_amps"]) for item in (all_time_max_items or [])
     }
@@ -51,6 +60,8 @@ def build_history_payload(latest_items, whole_home_history, all_time_max_items=N
 
 
 def build_live_payload(readings_by_circuit):
+    """Shapes handle_live_request()'s dict into the JSON structure
+    /api/live actually returns to the browser."""
     return {
         "circuits": [
             {"circuit_id": cid, "name": info["name"], "amps": info["amps"]}
@@ -70,12 +81,17 @@ def find_whole_home_circuit_id(latest_items):
 
 
 def since_iso(now=None):
+    """Returns the ISO timestamp 30 days before `now` — the lower bound for
+    the history graph's window. `now` is only overridden by tests."""
     now = now or datetime.datetime.utcnow()
     since = now - datetime.timedelta(days=HISTORY_DAYS)
     return since.strftime("%Y-%m-%dT%H:00:00Z")
 
 
 def handle_history_request(table):
+    """Serves /api/history: everything the dashboard needs on page load —
+    every circuit's latest + all-time-max reading, plus 30 days of hourly
+    Main history for the graph."""
     latest_items = dynamo.get_latest_readings(table)
     all_time_items = dynamo.get_all_time_maxes(table)
     whole_home_id = find_whole_home_circuit_id(latest_items)
@@ -84,6 +100,9 @@ def handle_history_request(table):
 
 
 def handle_live_request(email, password):
+    """Serves /api/live: a real-time reading straight from Emporia,
+    bypassing DynamoDB entirely. Only called while the dashboard's "Live
+    reading" toggle is switched on."""
     vue = get_cached_client(email, password)
     channels = emporia_client.fetch_channels(vue)  # already excludes the combined multi-leg channel
     device_gids = list({ch["device_gid"] for ch in channels})
@@ -137,6 +156,8 @@ def _error_response(message):
 
 
 def lambda_handler(event, context):
+    """Entry point AWS invokes for every HTTP request to the Function URL.
+    Routes by method + path — no framework, just three if-blocks."""
     method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
     path = event.get("rawPath", "/")
 

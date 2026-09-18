@@ -1,3 +1,6 @@
+# The entire dashboard — HTML, CSS, and JS — as one string, served
+# verbatim by web/handler.py's `/` route. No build step, no framework;
+# edit this string directly and redeploy to change the page.
 PAGE_HTML = """<!doctype html>
 <html lang="en">
 <head>

@@ -1,3 +1,8 @@
+"""All calls to Emporia's API go through this file. It wraps pyemvue
+(the third-party Emporia client library) and converts its amp-hour
+readings into instantaneous amps — nothing else in this app talks to
+Emporia directly or knows about watts/voltage."""
+
 import pyemvue
 from pyemvue.device import VueDeviceChannel
 from pyemvue.enums import Scale, Unit
@@ -8,17 +13,24 @@ WHOLE_HOME_NAME = "Main"
 
 
 def amphours_to_amps(amp_hours, scale_seconds=SCALE_SECONDS):
+    """Emporia reports energy (amp-hours) for a time bucket, not a live
+    current reading — scale by 3600/scale_seconds to convert "amp-hours
+    consumed in this bucket" into an instantaneous amps figure."""
     if not amp_hours or amp_hours < 0:
         return 0.0
     return amp_hours * (3600 / scale_seconds)
 
 
 def max_amps_from_series(amp_hours_series, scale_seconds=SCALE_SECONDS):
+    """Converts a whole series of amp-hour readings to amps and returns the
+    peak — this is how the app gets a TRUE max instead of an average."""
     amps = [amphours_to_amps(v, scale_seconds) for v in amp_hours_series if v is not None]
     return max(amps) if amps else 0.0
 
 
 def login(email, password):
+    """Authenticates against Emporia and returns a client object that every
+    other function in this file needs as its first argument."""
     vue = pyemvue.PyEmVue()
     vue.login(username=email, password=password)
     return vue
@@ -74,6 +86,9 @@ def mains_leg_channels(device_gid):
 
 
 def fetch_hour_max_amps(vue, channel_obj, hour_start, hour_end):
+    """True hourly max for a single circuit: pulls per-second readings for
+    the whole hour and takes the peak, rather than sampling at poll time
+    and risking missing a brief spike."""
     usage_list, _ = vue.get_chart_usage(
         channel_obj,
         start=hour_start,
